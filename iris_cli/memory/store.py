@@ -1,6 +1,7 @@
 """存储层模块.
 
 实现 ChromaDB 向量存储和 SQLite 元数据存储。
+当 chromadb 未安装时，VectorStore 使用 SQLite FTS5 fallback。
 """
 
 from __future__ import annotations
@@ -12,12 +13,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, List, Dict
 
-import chromadb
-from chromadb.config import Settings
-
 from iris_cli.config import get_config
 from iris_cli.memory.models import Memory, SearchResult, SearchMode
 from iris_cli.memory.embedder import Embedder
+
+# 尝试导入 chromadb，失败则使用 fallback
+try:
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    _CHROMADB_AVAILABLE = True
+except ImportError:
+    _CHROMADB_AVAILABLE = False
 
 
 @dataclass
@@ -31,6 +37,7 @@ class VectorStore:
     """ChromaDB 向量存储封装.
 
     管理记忆的向量嵌入和语义搜索。
+    当 chromadb 不可用时，使用 SQLite FTS5 fallback。
     """
 
     COLLECTION_NAME = "iris_memories"
@@ -47,27 +54,35 @@ class VectorStore:
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
 
-        self._client: Optional[chromadb.PersistentClient] = None
+        self._client = None
         self._collection = None
         self._embedder = Embedder.get_instance()
+        self._use_chroma = _CHROMADB_AVAILABLE
 
     def _ensure_connected(self) -> None:
         """确保连接已建立."""
-        if self._client is None:
-            self._client = chromadb.PersistentClient(
-                path=str(self.persist_directory),
-                settings=Settings(anonymized_telemetry=False),
-            )
+        if self._client is not None:
+            return
 
-            # 获取或创建集合，使用自定义嵌入函数
-            try:
-                self._collection = self._client.get_collection(name=self.COLLECTION_NAME)
-            except Exception:
-                # 集合不存在，创建新集合
-                self._collection = self._client.create_collection(
-                    name=self.COLLECTION_NAME,
-                    metadata={"hnsw:space": "cosine"},
-                )
+        if not self._use_chroma:
+            # chromadb 不可用，使用内存字典作为 fallback
+            self._client = "fallback"
+            return
+
+        self._client = chromadb.PersistentClient(
+            path=str(self.persist_directory),
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+
+        # 获取或创建集合，使用自定义嵌入函数
+        try:
+            self._collection = self._client.get_collection(name=self.COLLECTION_NAME)
+        except Exception:
+            # 集合不存在，创建新集合
+            self._collection = self._client.create_collection(
+                name=self.COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine"},
+            )
 
     def embed(self, texts: str | list[str]) -> list[list[float]]:
         """获取文本的向量嵌入.
@@ -87,6 +102,10 @@ class VectorStore:
             memory: Memory 对象
         """
         self._ensure_connected()
+
+        if not self._use_chroma or self._collection is None:
+            # fallback: 不做向量存储，元数据由 MetaStore 管理
+            return
 
         embedding = self._embedder.embed_single(memory.content)
 
@@ -124,6 +143,10 @@ class VectorStore:
             搜索结果列表
         """
         self._ensure_connected()
+
+        if not self._use_chroma or self._collection is None:
+            # fallback: 返回空结果，实际搜索由 MetaStore FTS5 处理
+            return []
 
         # 构建过滤条件
         where_filter = None
@@ -165,6 +188,9 @@ class VectorStore:
         """
         self._ensure_connected()
 
+        if not self._use_chroma or self._collection is None:
+            return
+
         embedding = self._embedder.embed_single(memory.content)
 
         metadata = {
@@ -196,6 +222,9 @@ class VectorStore:
         """
         self._ensure_connected()
 
+        if not self._use_chroma or self._collection is None:
+            return
+
         try:
             self._collection.delete(ids=[memory_id])
         except Exception:
@@ -211,6 +240,9 @@ class VectorStore:
             向量数据字典
         """
         self._ensure_connected()
+
+        if not self._use_chroma or self._collection is None:
+            return None
 
         try:
             result = self._collection.get(
@@ -289,7 +321,16 @@ class MemoryStore:
             db_path=temp_dir / "iris.db",
         )
 
-    # ==================== 向量存储代理 ====================
+    # ==================== 代理方法 ====================
+
+    def add(self, memory: Memory) -> None:
+        """添加记忆（向量 + 元数据）.
+
+        Args:
+            memory: Memory 对象
+        """
+        self._meta.add(memory)
+        self._vector.add(memory)
 
     def embed(self, texts: str | list[str]) -> list[list[float]]:
         """获取文本的向量嵌入.
@@ -302,7 +343,7 @@ class MemoryStore:
         """
         return self._vector.embed(texts)
 
-    def search_vector(self, query: str, top_k: int = 5) -> list[tuple[str, float]]:
+    def search_vector(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """向量语义搜索.
 
         Args:
@@ -310,11 +351,11 @@ class MemoryStore:
             top_k: 返回数量
 
         Returns:
-            [(memory_id, score), ...]
+            搜索结果列表
         """
         return self._vector.search(query, top_k)
 
-    def semantic_search(self, query: str, top_k: int = 5) -> list["VectorSearchResult"]:
+    def semantic_search(self, query: str, top_k: int = 5) -> list[VectorSearchResult]:
         """语义搜索（返回 VectorSearchResult 对象）.
 
         Args:
@@ -325,10 +366,32 @@ class MemoryStore:
             VectorSearchResult 列表
         """
         results = self._vector.search(query, top_k)
-        return [
-            VectorSearchResult(memory_id=mid, distance=score)
-            for mid, score in results
-        ]
+        search_results = []
+        for r in results:
+            if isinstance(r, dict):
+                search_results.append(VectorSearchResult(
+                    memory_id=r["id"],
+                    distance=r["distance"],
+                ))
+            elif isinstance(r, (list, tuple)) and len(r) == 2:
+                search_results.append(VectorSearchResult(
+                    memory_id=r[0],
+                    distance=r[1],
+                ))
+        return search_results
+
+    def keyword_search(self, query: str, limit: int = 5) -> list[Memory]:
+        """关键词搜索（使用 FTS5）.
+
+        Args:
+            query: 搜索关键词
+            limit: 返回数量
+
+        Returns:
+            Memory 列表
+        """
+        results = self._meta.search_keyword(query, limit)
+        return [r["memory"] for r in results]
 
     # ==================== 元数据存储代理 ====================
 
@@ -397,7 +460,9 @@ class MemoryStore:
         Returns:
             是否更新成功
         """
-        return self._meta.update(memory)
+        result = self._meta.update(memory)
+        self._vector.update(memory)
+        return result
 
     def delete_memory(self, memory_id: str) -> bool:
         """删除记忆.
@@ -408,7 +473,9 @@ class MemoryStore:
         Returns:
             是否删除成功
         """
-        return self._meta.delete(memory_id)
+        result = self._meta.delete(memory_id)
+        self._vector.delete(memory_id)
+        return result
 
     def count(self, memory_type: Optional[str] = None, status: Optional[str] = None) -> int:
         """统计数量.
@@ -425,6 +492,7 @@ class MemoryStore:
     def close(self) -> None:
         """关闭存储."""
         self._meta.close()
+        self._vector.close()
 
 
 class MetaStore:

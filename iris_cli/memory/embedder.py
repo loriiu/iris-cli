@@ -2,6 +2,7 @@
 
 使用 sentence-transformers 生成文本向量嵌入。
 提供本地模型和简单 hash fallback。
+当 sentence-transformers 未安装时，自动降级为 hash 嵌入。
 """
 
 import hashlib
@@ -43,10 +44,9 @@ class Embedder:
             self._dimension = self._model.get_sentence_embedding_dimension()
             self._initialized = True
         except ImportError:
-            raise RuntimeError(
-                "sentence-transformers 未安装。"
-                "请运行: pip install sentence-transformers"
-            )
+            # sentence-transformers 未安装，使用 hash fallback
+            self._initialized = True
+            self._model = None
         except Exception:
             # 模型加载失败，使用 fallback
             self._initialized = True
