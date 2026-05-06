@@ -31,11 +31,20 @@ class ExportOptions:
 
 @dataclass
 class ImportOptions:
-    """导入选项."""
+    """导入选项.
+
+    支持三种冲突处理模式：
+    - skip_existing: 跳过已存在的记忆（根据ID判断）
+    - overwrite: 覆盖已存在的记忆
+    - merge: 合并已存在的记忆（默认）
+    """
 
     format: str = "json"  # json | markdown
     source: str | None = None
-    merge_existing: bool = True  # 如果 ID 存在则合并
+    # 冲突处理模式：skip | overwrite | merge
+    conflict_mode: str = "merge"
+    # 预览模式，不实际执行
+    dry_run: bool = False
 
 
 @dataclass
@@ -107,7 +116,16 @@ class Exporter:
         return result
 
     def _export_json(self, memories: list[Memory]) -> str:
-        """导出为 JSON 格式."""
+        """导出为 JSON 格式.
+
+        规格格式：
+        {
+            "version": "1.0",
+            "exported_at": "2026-05-06T15:00:00",
+            "total_count": 42,
+            "memories": [...]
+        }
+        """
         data = []
         for m in memories:
             data.append({
@@ -125,7 +143,15 @@ class Exporter:
                 "metadata": m.metadata or {},
             })
 
-        return json.dumps(data, ensure_ascii=False, indent=2)
+        # 外层包装，符合规格
+        output = {
+            "version": "1.0",
+            "exported_at": datetime.now().isoformat(),
+            "total_count": len(memories),
+            "memories": data,
+        }
+
+        return json.dumps(output, ensure_ascii=False, indent=2)
 
     def _export_markdown(self, memories: list[Memory]) -> str:
         """导出为 Markdown 格式."""
@@ -221,17 +247,25 @@ class Importer:
                 # 检查是否已存在
                 existing = self.store.get_memory(memory.id)
                 if existing:
-                    if options.merge_existing:
+                    if options.dry_run:
+                        # 预览模式
+                        result.skipped += 1
+                    elif options.conflict_mode == "skip":
+                        # 跳过已存在
+                        result.skipped += 1
+                    elif options.conflict_mode == "overwrite":
+                        # 覆盖已存在
+                        self.store.update_memory(memory)
+                        result.imported += 1
+                    else:  # merge (默认)
                         # 合并元数据
                         existing.metadata = existing.metadata or {}
                         existing.metadata["imported_versions"] = (
                             existing.metadata.get("imported_versions", [])
                             + [memory.content]
                         )
-                        self.store._meta.update(memory.id, metadata=existing.metadata)
+                        self.store.update_memory(existing)
                         result.imported += 1
-                    else:
-                        result.skipped += 1
                 else:
                     # 添加新记忆
                     self.store.add(memory)
@@ -264,16 +298,25 @@ class Importer:
                 # 检查是否已存在
                 existing = self.store.get_memory(memory.id)
                 if existing:
-                    if options.merge_existing:
+                    if options.dry_run:
+                        # 预览模式
+                        result.skipped += 1
+                    elif options.conflict_mode == "skip":
+                        # 跳过已存在
+                        result.skipped += 1
+                    elif options.conflict_mode == "overwrite":
+                        # 覆盖已存在
+                        self.store.update_memory(memory)
+                        result.imported += 1
+                    else:  # merge (默认)
+                        # 合并元数据
                         existing.metadata = existing.metadata or {}
                         existing.metadata["imported_versions"] = (
                             existing.metadata.get("imported_versions", [])
                             + [memory.content]
                         )
-                        self.store._meta.update(memory.id, metadata=existing.metadata)
+                        self.store.update_memory(existing)
                         result.imported += 1
-                    else:
-                        result.skipped += 1
                 else:
                     self.store.add(memory)
                     result.imported += 1
@@ -281,10 +324,6 @@ class Importer:
             except Exception as e:
                 result.errors.append(f"Failed to import markdown block: {e}")
         
-        console.print(
-            f"[green]Imported {result.imported} memories, "
-            f"skipped {result.skipped}[/green]"
-        )
         return result
     
     def _split_markdown_memories(self, content: str) -> list[str]:
@@ -456,3 +495,8 @@ class Importer:
         except KeyError as e:
             console.print(f"[red]Missing required field: {e}[/red]")
             return None
+
+
+# CLI 兼容别名
+MemoryExporter = Exporter
+MemoryImporter = Importer

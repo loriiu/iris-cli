@@ -74,16 +74,10 @@ class DecayEngine:
     ) -> float:
         """计算给定时间点的记忆权重。
 
-        使用艾宾浩斯遗忘曲线公式:
-        weight(t) = weight_0 × e^(-t/S)
-        S = S_0 × (access_count + 1)^0.5
-
-        Args:
-            memory: 记忆对象
-            current_time: 当前时间，默认为now()
-
-        Returns:
-            计算后的权重值 [0.0, 1.0]
+        使用分段衰减策略:
+        - Day 1: -10% (decay_rate_day1)
+        - Day 2-7: -5%/天 (decay_rate_week1)
+        - Day 8+: -1%/天 (decay_rate_month1)
         """
         if current_time is None:
             current_time = datetime.now()
@@ -95,11 +89,26 @@ class DecayEngine:
         if days_elapsed < 1.0:
             return memory.weight
 
-        S_0 = config.get("memory", "decay_stability_base", default=7.0)
-        S = S_0 * math.sqrt(memory.access_count + 1)
+        # 获取衰减率参数
+        decay_day1 = config.decay_rate_day1  # 0.10
+        decay_week1 = config.decay_rate_week1  # 0.05
+        decay_month1 = config.decay_rate_month1  # 0.01
 
-        retention = math.exp(-days_elapsed / S)
-        new_weight = memory.weight * retention
+        new_weight = memory.weight
+
+        # Day 1: 衰减 decay_rate_day1
+        if days_elapsed >= 1.0:
+            new_weight = new_weight * (1 - decay_day1)
+
+        # Day 2-7: 每天衰减 decay_rate_week1
+        days_in_week1 = min(days_elapsed - 1, 6)  # 最多6天
+        if days_in_week1 > 0:
+            new_weight = new_weight * ((1 - decay_week1) ** days_in_week1)
+
+        # Day 8+: 每天衰减 decay_rate_month1
+        days_in_month1 = max(0, days_elapsed - 7)
+        if days_in_month1 > 0:
+            new_weight = new_weight * ((1 - decay_month1) ** days_in_month1)
 
         return max(0.0, min(1.0, new_weight))
 

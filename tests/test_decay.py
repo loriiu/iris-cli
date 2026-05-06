@@ -164,14 +164,37 @@ class TestDecayEngine:
         # 衰减应该随时间增加
         assert weight_30d < weight_7d < weight_1d
 
-    def test_calculate_decay_access_count_effect(self, mock_store, mock_config):
-        """测试访问次数对衰减的影响（记忆越久越慢衰减）。"""
+    def test_calculate_decay_segmented_strategy(self, mock_store, mock_config):
+        """测试分段衰减策略。
+
+        分段衰减规则:
+        - Day 1: -10%
+        - Day 2-7: -5%/天
+        - Day 8+: -1%/天
+        """
         engine = DecayEngine(store=mock_store)
-        
         now = datetime.now()
-        
-        # 7天前，0次访问
-        memory_no_access = Memory(
+
+        # Day 1: 不衰减
+        memory_day1 = Memory(
+            id="test",
+            content="测试",
+            summary="摘要",
+            memory_type=MemoryType.SEMANTIC,
+            tags=[],
+            weight=1.0,
+            source="test",
+            created_at=now - timedelta(hours=12),
+            accessed_at=now - timedelta(hours=12),
+            access_count=0,
+            status=MemoryStatus.ACTIVE,
+            metadata={},
+        )
+        weight_day1 = engine.calculate_decay(memory_day1)
+        assert abs(weight_day1 - 1.0) < 0.001, "Day 1 不应衰减"
+
+        # Day 7: 衰减10% + 6天*5% = 36.5%
+        memory_week = Memory(
             id="test",
             content="测试",
             summary="摘要",
@@ -185,9 +208,12 @@ class TestDecayEngine:
             status=MemoryStatus.ACTIVE,
             metadata={},
         )
-        
-        # 7天前，10次访问
-        memory_with_access = Memory(
+        weight_week = engine.calculate_decay(memory_week)
+        expected_week = 1.0 * 0.9 * (0.95 ** 6)  # Day1 + 6天
+        assert abs(weight_week - expected_week) < 0.001, f"Week decay: {weight_week} vs {expected_week}"
+
+        # Day 14: 衰减10% + 6天*5% + 7天*1% = 43.7%
+        memory_month = Memory(
             id="test",
             content="测试",
             summary="摘要",
@@ -195,18 +221,15 @@ class TestDecayEngine:
             tags=[],
             weight=1.0,
             source="test",
-            created_at=now - timedelta(days=7),
-            accessed_at=now - timedelta(days=7),
-            access_count=10,
+            created_at=now - timedelta(days=14),
+            accessed_at=now - timedelta(days=14),
+            access_count=0,
             status=MemoryStatus.ACTIVE,
             metadata={},
         )
-        
-        weight_no_access = engine.calculate_decay(memory_no_access)
-        weight_with_access = engine.calculate_decay(memory_with_access)
-        
-        # 有更多访问的记忆衰减更慢
-        assert weight_with_access > weight_no_access
+        weight_month = engine.calculate_decay(memory_month)
+        expected_month = 1.0 * 0.9 * (0.95 ** 6) * (0.99 ** 7)
+        assert abs(weight_month - expected_month) < 0.001, f"Month decay: {weight_month} vs {expected_month}"
 
     def test_reinforce_memory(self, mock_store, mock_config):
         """测试记忆强化。"""

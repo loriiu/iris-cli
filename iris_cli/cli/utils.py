@@ -143,6 +143,8 @@ def print_stats(
     avg_weight: float,
     weight_distribution: dict[str, int] | None = None,
     top_tags: list[tuple[str, int]] | None = None,
+    recent_activity: dict | None = None,
+    storage_size: dict | None = None,
 ) -> None:
     """打印统计信息.
 
@@ -153,33 +155,68 @@ def print_stats(
         avg_weight: 平均权重
         weight_distribution: 权重分布
         top_tags: 热门标签
+        recent_activity: 近期活动统计（7天内新增/衰减/访问）
+        storage_size: 存储大小信息
     """
-    table = Table(title="记忆统计", show_header=False)
+    from rich.table import Table
+    from rich.panel import Panel
+
+    # 总体统计
+    table = Table(title="[bold]记忆统计[/bold]", show_header=False)
     table.add_column("指标", style="cyan")
     table.add_column("数值", justify="right")
 
-    table.add_row("总记忆数", str(total))
+    table.add_row("总记忆数", f"[bold]{total}[/bold]")
     table.add_row("平均权重", f"{avg_weight:.3f}")
 
     console.print(table)
 
+    # 存储大小
+    if storage_size:
+        size_table = Table(title="存储信息", show_header=False)
+        size_table.add_column("指标", style="cyan")
+        size_table.add_column("大小", justify="right")
+        size_table.add_row("SQLite数据库", storage_size.get("sqlite", "N/A"))
+        size_table.add_row("向量数据库", storage_size.get("chroma", "N/A"))
+        size_table.add_row("总计", f"[bold]{storage_size.get('total', 'N/A')}[/bold]")
+        console.print(size_table)
+
+    # 近期活动
+    if recent_activity:
+        activity_table = Table(title="近期活动 (7天内)", show_header=False)
+        activity_table.add_column("指标", style="cyan")
+        activity_table.add_column("数量", justify="right")
+        activity_table.add_row("新增记忆", str(recent_activity.get("new_count", 0)))
+        activity_table.add_row("衰减记忆", str(recent_activity.get("decayed_count", 0)))
+        activity_table.add_row("被访问", str(recent_activity.get("accessed_count", 0)))
+        if recent_activity.get("last_accessed"):
+            activity_table.add_row("最近访问", recent_activity.get("last_accessed"))
+        console.print(activity_table)
+
+    # 类型分布
     type_table = Table(title="按类型分布", show_header=True)
     type_table.add_column("类型", style="cyan")
     type_table.add_column("数量", justify="right")
     type_table.add_column("占比", justify="right")
+    type_table.add_column("分布", style="green")
 
     for mem_type, count in by_type.items():
         pct = (count / total * 100) if total > 0 else 0
-        type_table.add_row(mem_type, str(count), f"{pct:.1f}%")
+        bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+        type_table.add_row(mem_type, str(count), f"{pct:.1f}%", bar)
 
     console.print(type_table)
 
+    # 状态分布
     status_table = Table(title="按状态分布", show_header=True)
     status_table.add_column("状态", style="cyan")
     status_table.add_column("数量", justify="right")
+    status_table.add_column("分布", style="green")
 
     for status, count in by_status.items():
-        status_table.add_row(status, str(count))
+        pct = (count / total * 100) if total > 0 else 0
+        bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+        status_table.add_row(status, str(count), bar)
 
     console.print(status_table)
 
@@ -188,20 +225,24 @@ def print_stats(
         weight_table = Table(title="权重分布", show_header=True)
         weight_table.add_column("区间", style="cyan")
         weight_table.add_column("数量", justify="right")
+        weight_table.add_column("分布", style="green")
 
         for range_label, count in weight_distribution.items():
-            weight_table.add_row(range_label, str(count))
+            pct = (count / total * 100) if total > 0 else 0
+            bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+            weight_table.add_row(range_label, str(count), bar)
 
         console.print(weight_table)
 
     # 热门标签
     if top_tags:
         tag_table = Table(title="热门标签 (Top 10)", show_header=True)
+        tag_table.add_column("排名", justify="right", style="dim")
         tag_table.add_column("标签", style="cyan")
         tag_table.add_column("使用次数", justify="right")
 
-        for tag, count in top_tags[:10]:
-            tag_table.add_row(tag, str(count))
+        for i, (tag, count) in enumerate(top_tags[:10], 1):
+            tag_table.add_row(str(i), tag, str(count))
 
         console.print(tag_table)
 

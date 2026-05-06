@@ -549,8 +549,12 @@ def memory_stats() -> None:
     示例:
         iris memory stats
     """
+    import os
+    from datetime import timedelta
+    from pathlib import Path
     try:
         _, meta_store = get_stores()
+        config = get_config()
 
         try:
             total = meta_store.count()
@@ -593,12 +597,74 @@ def memory_stats() -> None:
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
                 top_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
+
+                # 近期活动统计（7天内）
+                seven_days_ago = datetime.now() - timedelta(days=7)
+                recent_activity = {
+                    "new_count": sum(1 for m in memories if m.created_at >= seven_days_ago),
+                    "decayed_count": sum(1 for m in memories if m.status == MemoryStatus.DECAYED),
+                    "accessed_count": sum(1 for m in memories if m.accessed_at >= seven_days_ago),
+                    "last_accessed": max(m.accessed_at for m in memories).strftime("%Y-%m-%d %H:%M") if memories else None,
+                }
+
+                # 来源统计
+                source_counts: dict[str, int] = {}
+                for m in memories:
+                    source_counts[m.source] = source_counts.get(m.source, 0) + 1
+                top_sources = sorted(source_counts.items(), key=lambda x: x[1], reverse=True)
+                if top_sources:
+                    recent_activity["top_source"] = f"{top_sources[0][0]} ({top_sources[0][1]})"
+
+                # 存储大小
+                data_dir = Path(config.data_dir).expanduser()
+                sqlite_path = data_dir / "memories.db"
+                chroma_path = data_dir / "chroma"
+
+                def format_size(path: Path) -> str:
+                    if path.exists():
+                        if path.is_file():
+                            size = path.stat().st_size
+                        else:
+                            size = sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
+                        # 转换为 KB/MB
+                        if size < 1024:
+                            return f"{size} B"
+                        elif size < 1024 * 1024:
+                            return f"{size / 1024:.1f} KB"
+                        else:
+                            return f"{size / (1024 * 1024):.1f} MB"
+                    return "0 B"
+
+                sqlite_size = format_size(sqlite_path)
+                chroma_size = format_size(chroma_path)
+
+                # 计算总大小
+                total_bytes = 0
+                if sqlite_path.exists():
+                    total_bytes += sqlite_path.stat().st_size if sqlite_path.is_file() else 0
+                if chroma_path.exists():
+                    total_bytes += sum(f.stat().st_size for f in chroma_path.rglob('*') if f.is_file())
+
+                if total_bytes < 1024:
+                    total_size = f"{total_bytes} B"
+                elif total_bytes < 1024 * 1024:
+                    total_size = f"{total_bytes / 1024:.1f} KB"
+                else:
+                    total_size = f"{total_bytes / (1024 * 1024):.1f} MB"
+
+                storage_size = {
+                    "sqlite": sqlite_size,
+                    "chroma": chroma_size,
+                    "total": total_size,
+                }
             else:
                 avg_weight = 0
                 weight_distribution = None
                 top_tags = None
+                recent_activity = None
+                storage_size = None
 
-            print_stats(total, by_type, by_status, avg_weight, weight_distribution, top_tags)
+            print_stats(total, by_type, by_status, avg_weight, weight_distribution, top_tags, recent_activity, storage_size)
 
         finally:
             meta_store.close()
@@ -668,12 +734,13 @@ def consolidate_cmd(
             threshold=sim_threshold,
         )
 
-        if result.merged_count == 0 and result.skipped_count == 0:
+        if result.pairs_found == 0:
             console.print("\n[green]✓ 没有找到需要整合的记忆对[/green]\n")
         else:
+            skipped = result.pairs_found - result.memories_consolidated
             console.print(f"\n[green]✓ 整合完成:[/green]")
-            console.print(f"  - 合并: {result.merged_count} 对")
-            console.print(f"  - 跳过: {result.skipped_count} 对")
+            console.print(f"  - 合并: {result.memories_consolidated} 对")
+            console.print(f"  - 跳过: {skipped} 对")
             console.print(f"  - 总耗时: {result.duration:.2f}s\n")
 
     except Exception as e:
@@ -750,17 +817,21 @@ def export_cmd(
         console.print(f"格式: [yellow]{export_format}[/yellow]")
         console.print(f"输出: [yellow]{output}[/yellow]")
 
-        # 执行导出
-        result = exporter.export(
-            output_path=output,
-            export_format=export_format,
-            memory_type=mem_type,
-            status=mem_status,
+        # 构建导出选项
+        from iris_cli.memory.io import ExportOptions
+        options = ExportOptions(
+            format=export_format,
+            output=output,
+            include_decayed=False,
+            include_consolidated=False,
         )
 
+        # 执行导出
+        result = exporter.export(options)
+
         console.print(f"\n[green]✓ 导出完成[/green]")
-        console.print(f"  - 导出记录: {result['exported_count']}")
-        console.print(f"  - 输出文件: {result['output_path']}\n")
+        console.print(f"  - 导出记录: {result.count}")
+        console.print(f"  - 输出文件: {result.output_path}\n")
 
     except Exception as e:
         print_error(f"导出失败: {e}")
@@ -776,37 +847,67 @@ def import_cmd(
         "-f",
         help="导入格式 (auto/json/markdown)",
     ),
+    conflict: str = typer.Option(
+        "merge",
+        "--conflict",
+        "-c",
+        help="冲突处理模式: merge(合并)/skip(跳过)/overwrite(覆盖)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="预览模式，不实际执行",
+    ),
 ) -> None:
     """
     从文件导入记忆。
 
     支持 JSON 和 Markdown 格式，自动检测格式。
+    
+    冲突处理模式:
+    - merge: 合并已存在的记忆 (默认)
+    - skip: 跳过已存在的记忆
+    - overwrite: 覆盖已存在的记忆
     """
     try:
         from iris_cli.memory import MemoryImporter
+        from iris_cli.memory.io import ImportOptions
 
         importer = MemoryImporter()
 
         console.print(f"\n[bold cyan]📥 导入记忆[/bold cyan]\n")
         console.print(f"文件: [yellow]{input_path}[/yellow]")
+        console.print(f"冲突模式: [yellow]{conflict}[/yellow]")
+        if dry_run:
+            console.print(f"[yellow]⚠ 预览模式，不实际执行[/yellow]")
 
-        # 执行导入
-        result = importer.import_memories(
-            input_path=input_path,
-            import_format=import_format,
+        # 构建导入选项
+        options = ImportOptions(
+            format=import_format if import_format != "auto" else "json",
+            conflict_mode=conflict,
+            dry_run=dry_run,
         )
 
-        console.print(f"\n[green]✓ 导入完成[/green]")
-        console.print(f"  - 成功: {result['success_count']}")
-        console.print(f"  - 跳过: {result['skipped_count']}")
-        console.print(f"  - 失败: {result['failed_count']}\n")
+        # 执行导入
+        result = importer.import_from_file(input_path, options)
 
-        if result['failed_count'] > 0 and result.get('errors'):
+        if dry_run:
+            console.print(f"\n[cyan]📋 预览结果:[/cyan]")
+            console.print(f"  - 将导入: {result.imported}")
+            console.print(f"  - 将跳过: {result.skipped}")
+        else:
+            console.print(f"\n[green]✓ 导入完成[/green]")
+            console.print(f"  - 成功: {result.imported}")
+            console.print(f"  - 跳过: {result.skipped}")
+            console.print(f"  - 失败: {len(result.errors)}\n")
+
+        if result.errors:
             console.print("[yellow]错误详情:[/yellow]")
-            for error in result['errors'][:5]:
+            for error in result.errors[:5]:
                 console.print(f"  - {error}")
-            if len(result['errors']) > 5:
-                console.print(f"  ... 还有 {len(result['errors']) - 5} 个错误")
+            if len(result.errors) > 5:
+                console.print(f"  ... 还有 {len(result.errors) - 5} 个错误")
 
     except FileNotFoundError:
         print_error(f"文件不存在: {input_path}")

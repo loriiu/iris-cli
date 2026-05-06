@@ -56,19 +56,22 @@ class TestImportOptions:
 
         assert opts.format == "json"
         assert opts.source is None
-        assert opts.merge_existing is True
+        assert opts.conflict_mode == "merge"
+        assert opts.dry_run is False
 
     def test_import_options_custom(self):
         """Test custom ImportOptions."""
         opts = ImportOptions(
             format="markdown",
             source="backup",
-            merge_existing=False,
+            conflict_mode="skip",
+            dry_run=True,
         )
 
         assert opts.format == "markdown"
         assert opts.source == "backup"
-        assert opts.merge_existing is False
+        assert opts.conflict_mode == "skip"
+        assert opts.dry_run is True
 
 
 class TestExportResult:

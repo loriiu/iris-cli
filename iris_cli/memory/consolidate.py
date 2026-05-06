@@ -5,6 +5,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
+import time
 import uuid
 
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
@@ -30,6 +31,7 @@ class ConsolidationResult:
     memories_preserved: int = 0
     pairs: list[ConsolidationPair] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    duration: float = 0.0  # 耗时（秒）
 
 
 class Consolidator:
@@ -81,8 +83,8 @@ class Consolidator:
             embedding1 = self._embedder.embed([text1])[0]
             embedding2 = self._embedder.embed([text2])[0]
         else:
-            embedding1 = self._store._vector._embed([text1])[0]
-            embedding2 = self._store._vector._embed([text2])[0]
+            embedding1 = self._store.embed([text1])[0]
+            embedding2 = self._store.embed([text2])[0]
 
         # 余弦相似度
         dot_product = sum(a * b for a, b in zip(embedding1, embedding2))
@@ -190,27 +192,17 @@ class Consolidator:
         )
 
         # 更新元数据
-        self._store._meta.update_memory(
-            memory_id=main_memory.id,
-            summary=main_memory.summary,
-            tags=main_memory.tags,
-            weight=main_memory.weight,
-            metadata=main_memory.metadata,
-        )
+        self._store.update_memory(main_memory)
 
         # 2. 标记被合并记忆
         to_merge.status = MemoryStatus.CONSOLIDATED
         to_merge.metadata["consolidated_into"] = main_memory.id
         to_merge.metadata["consolidated_at"] = now
 
-        self._store._meta.update_memory(
-            memory_id=to_merge.id,
-            status=MemoryStatus.CONSOLIDATED,
-            metadata=to_merge.metadata,
-        )
+        self._store.update_memory(to_merge)
 
         # 3. 从向量存储中删除
-        self._store._vector.delete(to_merge.id)
+        self._store.delete(to_merge.id)
 
     def consolidate(
         self,
@@ -232,6 +224,7 @@ class Consolidator:
             self.threshold = threshold
 
         result = ConsolidationResult()
+        start_time = time.time()
 
         # 查找可整合的记忆对
         pairs = self.find_consolidation_pairs(memory_type=memory_type)
@@ -289,4 +282,9 @@ class Consolidator:
             len(set(self._store.list(limit=10000))) - len(processed_ids)
         )
 
+        result.duration = time.time() - start_time
         return result
+
+
+# CLI 兼容别名
+ConsolidationEngine = Consolidator

@@ -154,7 +154,7 @@ class TestConsolidator:
         store.list.return_value = [memory_a, memory_b]
 
         # Mock embedder
-        store._vector._embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
+        store.embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
 
         consolidator = Consolidator(store=store, threshold=0.85)
         pairs = consolidator.find_consolidation_pairs()
@@ -199,7 +199,7 @@ class TestConsolidator:
             metadata={},
         )
         store.list.return_value = [memory_a, memory_b]
-        store._vector._embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
+        store.embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
 
         consolidator = Consolidator(store=store, threshold=0.85)
         result = consolidator.consolidate(dry_run=True)
@@ -244,7 +244,7 @@ class TestConsolidator:
             metadata={},
         )
         store.list.return_value = [memory_a, memory_b]
-        store._vector._embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
+        store.embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
 
         consolidator = Consolidator(store=store, threshold=0.85)
         result = consolidator.consolidate(

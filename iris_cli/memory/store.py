@@ -69,6 +69,17 @@ class VectorStore:
                     metadata={"hnsw:space": "cosine"},
                 )
 
+    def embed(self, texts: str | list[str]) -> list[list[float]]:
+        """获取文本的向量嵌入.
+
+        Args:
+            texts: 单个文本或文本列表
+
+        Returns:
+            向量嵌入列表
+        """
+        return self._embedder.embed(texts)
+
     def add(self, memory: Memory) -> None:
         """添加记忆向量.
 
@@ -279,6 +290,17 @@ class MemoryStore:
         )
 
     # ==================== 向量存储代理 ====================
+
+    def embed(self, texts: str | list[str]) -> list[list[float]]:
+        """获取文本的向量嵌入.
+
+        Args:
+            texts: 单个文本或文本列表
+
+        Returns:
+            向量嵌入列表
+        """
+        return self._vector.embed(texts)
 
     def search_vector(self, query: str, top_k: int = 5) -> list[tuple[str, float]]:
         """向量语义搜索.
