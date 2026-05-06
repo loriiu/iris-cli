@@ -1,0 +1,225 @@
+"""CLI 工具函数.
+
+提供 CLI 输出格式化和通用工具。
+"""
+
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from typing import Optional
+
+console = Console()
+
+
+def print_success(message: str) -> None:
+    """打印成功消息.
+
+    Args:
+        message: 消息内容
+    """
+    console.print(f"[green]✓[/green] {message}")
+
+
+def print_error(message: str) -> None:
+    """打印错误消息.
+
+    Args:
+        message: 错误内容
+    """
+    console.print(f"[red]✗[/red] {message}", style="red")
+
+
+def print_info(message: str) -> None:
+    """打印信息消息.
+
+    Args:
+        message: 消息内容
+    """
+    console.print(f"[blue]ℹ[/blue] {message}")
+
+
+def print_warning(message: str) -> None:
+    """打印警告消息.
+
+    Args:
+        message: 警告内容
+    """
+    console.print(f"[yellow]⚠[/yellow] {message}")
+
+
+def print_memory_table(memories: list, title: str = "记忆列表") -> None:
+    """打印记忆表格.
+
+    Args:
+        memories: 记忆列表
+        title: 表格标题
+    """
+    if not memories:
+        console.print("[dim]暂无记忆[/dim]")
+        return
+
+    table = Table(title=title, show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan", width=8)
+    table.add_column("类型", width=10)
+    table.add_column("摘要", width=40)
+    table.add_column("权重", width=8, justify="right")
+    table.add_column("状态", width=8)
+    table.add_column("访问次数", width=10, justify="right")
+
+    for memory in memories:
+        table.add_row(
+            memory.id[:8],
+            memory.memory_type.value,
+            memory.summary[:38] + ".." if len(memory.summary) > 38 else memory.summary,
+            f"{memory.weight:.2f}",
+            memory.status.value,
+            str(memory.access_count),
+        )
+
+    console.print(table)
+
+
+def print_memory_detail(memory) -> None:
+    """打印记忆详情.
+
+    Args:
+        memory: Memory 对象
+    """
+    from rich.table import Table
+
+    table = Table(title=f"记忆详情 - {memory.id[:8]}", show_header=False)
+    table.add_column("字段", style="cyan")
+    table.add_column("内容")
+
+    table.add_row("ID", memory.id)
+    table.add_row("类型", memory.memory_type.value)
+    table.add_row("摘要", memory.summary)
+    table.add_row("权重", f"{memory.weight:.2f}")
+    table.add_row("状态", memory.status.value)
+    table.add_row("来源", memory.source)
+    table.add_row("标签", ", ".join(memory.tags) if memory.tags else "-")
+    table.add_row("访问次数", str(memory.access_count))
+    table.add_row("创建时间", memory.created_at.strftime("%Y-%m-%d %H:%M:%S"))
+    table.add_row("最近访问", memory.accessed_at.strftime("%Y-%m-%d %H:%M:%S"))
+    table.add_row("内容", memory.content)
+
+    console.print(table)
+
+
+def print_search_results(results: list, query: str) -> None:
+    """打印搜索结果.
+
+    Args:
+        results: 搜索结果列表
+        query: 查询文本
+    """
+    if not results:
+        console.print(f"[dim]未找到与 '{query}' 相关的记忆[/dim]")
+        return
+
+    console.print(f"\n[bold]搜索结果 (关键词: '{query}')[/bold]\n")
+
+    for i, result in enumerate(results, 1):
+        memory = result.get("memory") or result.get("obj")
+        score = result.get("score", result.get("similarity", 0))
+
+        panel = Panel(
+            f"[bold cyan]{memory.summary}[/bold cyan]\n\n"
+            f"{memory.content[:200]}{'...' if len(memory.content) > 200 else ''}\n\n"
+            f"[dim]类型: {memory.memory_type.value} | "
+            f"权重: {memory.weight:.2f} | "
+            f"相似度: {score:.2f}[/dim]",
+            title=f"#{i} - {memory.id[:8]}",
+            border_style="blue",
+        )
+        console.print(panel)
+
+
+def print_stats(
+    total: int,
+    by_type: dict[str, int],
+    by_status: dict[str, int],
+    avg_weight: float,
+    weight_distribution: dict[str, int] | None = None,
+    top_tags: list[tuple[str, int]] | None = None,
+) -> None:
+    """打印统计信息.
+
+    Args:
+        total: 总数
+        by_type: 按类型统计
+        by_status: 按状态统计
+        avg_weight: 平均权重
+        weight_distribution: 权重分布
+        top_tags: 热门标签
+    """
+    table = Table(title="记忆统计", show_header=False)
+    table.add_column("指标", style="cyan")
+    table.add_column("数值", justify="right")
+
+    table.add_row("总记忆数", str(total))
+    table.add_row("平均权重", f"{avg_weight:.3f}")
+
+    console.print(table)
+
+    type_table = Table(title="按类型分布", show_header=True)
+    type_table.add_column("类型", style="cyan")
+    type_table.add_column("数量", justify="right")
+    type_table.add_column("占比", justify="right")
+
+    for mem_type, count in by_type.items():
+        pct = (count / total * 100) if total > 0 else 0
+        type_table.add_row(mem_type, str(count), f"{pct:.1f}%")
+
+    console.print(type_table)
+
+    status_table = Table(title="按状态分布", show_header=True)
+    status_table.add_column("状态", style="cyan")
+    status_table.add_column("数量", justify="right")
+
+    for status, count in by_status.items():
+        status_table.add_row(status, str(count))
+
+    console.print(status_table)
+
+    # 权重分布
+    if weight_distribution:
+        weight_table = Table(title="权重分布", show_header=True)
+        weight_table.add_column("区间", style="cyan")
+        weight_table.add_column("数量", justify="right")
+
+        for range_label, count in weight_distribution.items():
+            weight_table.add_row(range_label, str(count))
+
+        console.print(weight_table)
+
+    # 热门标签
+    if top_tags:
+        tag_table = Table(title="热门标签 (Top 10)", show_header=True)
+        tag_table.add_column("标签", style="cyan")
+        tag_table.add_column("使用次数", justify="right")
+
+        for tag, count in top_tags[:10]:
+            tag_table.add_row(tag, str(count))
+
+        console.print(tag_table)
+
+
+def confirm(prompt: str, default: bool = False) -> bool:
+    """确认提示.
+
+    Args:
+        prompt: 提示文本
+        default: 默认值
+
+    Returns:
+        用户选择
+    """
+    suffix = " [Y/n]" if default else " [y/N]"
+    response = console.input(f"{prompt}{suffix}: ").strip().lower()
+
+    if not response:
+        return default
+
+    return response in ("y", "yes")
