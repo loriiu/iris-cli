@@ -107,6 +107,10 @@ class Consolidator:
 
         Returns:
             可整合的记忆对列表
+
+        优化策略:
+        - n >= 100: 使用 ChromaDB 语义搜索批量筛选候选对 (top_k=5)，减少 O(n²) 计算
+        - n < 100: 直接 O(n²) 两两比较（精确计算）
         """
         # 获取所有 active 状态的记忆
         if memory_type:
@@ -121,6 +125,23 @@ class Consolidator:
         pairs: list[ConsolidationPair] = []
         n = len(memories)
 
+        if n < 100:
+            # 小数据量：直接 O(n²) 两两比较
+            pairs = self._find_pairs_brute_force(memories)
+        else:
+            # 大数据量：使用 ChromaDB 语义搜索优化
+            pairs = self._find_pairs_optimized(memories)
+
+        return pairs
+
+    def _find_pairs_brute_force(
+        self,
+        memories: list[Memory],
+    ) -> list[ConsolidationPair]:
+        """O(n²) 暴力查找 - 适用于小数据量"""
+        pairs: list[ConsolidationPair] = []
+        n = len(memories)
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -129,7 +150,7 @@ class Consolidator:
             TimeElapsedColumn(),
         ) as progress:
             task = progress.add_task(
-                "[cyan]扫描记忆对...",
+                "[cyan]暴力扫描记忆对...",
                 total=n * (n - 1) // 2,
             )
 
@@ -138,7 +159,6 @@ class Consolidator:
                     mem_a = memories[i]
                     mem_b = memories[j]
 
-                    # 计算相似度
                     similarity = self._calculate_similarity(
                         mem_a.content,
                         mem_b.content,
@@ -147,12 +167,7 @@ class Consolidator:
                     progress.advance(task)
 
                     if similarity >= self._threshold:
-                        # 确定合并方向：保留权重高的
-                        if mem_a.weight >= mem_b.weight:
-                            action = "merge_b_into_a"
-                        else:
-                            action = "merge_a_into_b"
-
+                        action = "merge_b_into_a" if mem_a.weight >= mem_b.weight else "merge_a_into_b"
                         pairs.append(ConsolidationPair(
                             memory_a=mem_a,
                             memory_b=mem_b,
@@ -161,6 +176,85 @@ class Consolidator:
                         ))
 
         return pairs
+
+    def _find_pairs_optimized(
+        self,
+        memories: list[Memory],
+    ) -> list[ConsolidationPair]:
+        """使用 ChromaDB 语义搜索优化 - 适用于大数据量 (n >= 100)
+
+        策略：对每个记忆，用 ChromaDB 搜索 top_k=5 个候选，然后只对候选对做精确比较
+        这样可以把 O(n²) 降低到约 O(n * top_k)
+        """
+        pairs: list[ConsolidationPair] = []
+        memory_map = {m.id: m for m in memories}
+        checked_pairs: set[tuple[str, str]] = set()
+
+        # 预热 ChromaDB（如果需要）
+        self._warm_up_chroma()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task(
+                f"[cyan]语义搜索候选对 (n={len(memories)})...",
+                total=len(memories),
+            )
+
+            for mem in memories:
+                # 用 ChromaDB 搜索相似记忆
+                candidates = self._store.search_vector(mem.content, top_k=6)
+
+                for candidate_id, chroma_score in candidates:
+                    # 跳过自己
+                    if candidate_id == mem.id:
+                        continue
+
+                    # 跳过已检查的对
+                    pair_key = tuple(sorted([mem.id, candidate_id]))
+                    if pair_key in checked_pairs:
+                        continue
+
+                    checked_pairs.add(pair_key)
+
+                    # 获取候选记忆
+                    candidate = memory_map.get(candidate_id)
+                    if not candidate:
+                        continue
+
+                    # 跳过不同类型的记忆
+                    if mem.memory_type != candidate.memory_type:
+                        continue
+
+                    # 精确计算相似度
+                    similarity = self._calculate_similarity(
+                        mem.content,
+                        candidate.content,
+                    )
+
+                    if similarity >= self._threshold:
+                        action = "merge_b_into_a" if mem.weight >= candidate.weight else "merge_a_into_b"
+                        pairs.append(ConsolidationPair(
+                            memory_a=mem,
+                            memory_b=candidate,
+                            similarity=similarity,
+                            suggested_action=action,
+                        ))
+
+                progress.advance(task)
+
+        return pairs
+
+    def _warm_up_chroma(self) -> None:
+        """预热 ChromaDB 连接"""
+        try:
+            self._store.search_vector("warm up", top_k=1)
+        except Exception:
+            pass
 
     def _merge_memories(
         self,

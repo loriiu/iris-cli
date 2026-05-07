@@ -247,6 +247,92 @@ def print_stats(
         console.print(tag_table)
 
 
+def print_decay_stats(
+    decayed_count: int,
+    archived_count: int,
+    preserved_count: int,
+    duration: float,
+) -> None:
+    """打印衰减统计.
+
+    Args:
+        decayed_count: 被衰减的记忆数量
+        archived_count: 被归档的记忆数量
+        preserved_count: 被保留的记忆数量
+        duration: 执行耗时
+    """
+    table = Table(title="衰减统计", show_header=False)
+    table.add_column("指标", style="cyan")
+    table.add_column("数量", justify="right")
+
+    table.add_row("衰减记忆", str(decayed_count))
+    table.add_row("归档记忆", str(archived_count))
+    table.add_row("保留记忆", str(preserved_count))
+    table.add_row("执行耗时", f"{duration:.2f}s")
+
+    console.print(table)
+
+
+def print_consolidation_pairs(pairs: list) -> None:
+    """打印整合候选对.
+
+    Args:
+        pairs: 整合候选对列表
+    """
+    if not pairs:
+        console.print("[yellow]没有找到可整合的记忆对[/yellow]")
+        return
+
+    table = Table(title=f"整合候选对 ({len(pairs)} 对)", show_header=True)
+    table.add_column("记忆1", style="cyan", no_wrap=False)
+    table.add_column("记忆2", style="cyan", no_wrap=False)
+    table.add_column("相似度", justify="right", style="green")
+
+    for pair in pairs[:10]:  # 最多显示10对
+        mem1 = pair.memory1
+        mem2 = pair.memory2
+        sim = pair.similarity
+        table.add_row(
+            mem1.content[:30] + "..." if len(mem1.content) > 30 else mem1.content,
+            mem2.content[:30] + "..." if len(mem2.content) > 30 else mem2.content,
+            f"{sim:.3f}",
+        )
+
+    console.print(table)
+
+    if len(pairs) > 10:
+        console.print(f"[dim]... 还有 {len(pairs) - 10} 对未显示[/dim]")
+
+
+def print_import_export_result(
+    operation: str,
+    count: int,
+    details: str = "",
+) -> None:
+    """打印导入导出结果.
+
+    Args:
+        operation: 操作类型 (import/export)
+        count: 处理数量
+        details: 详细信息
+    """
+    icon = "📥" if operation == "import" else "📤"
+    verb = "导入" if operation == "import" else "导出"
+
+    console.print(f"\n{icon} [bold]{verb}完成[/bold]")
+    console.print(f"  - {verb}记录: [green]{count}[/green]")
+
+    if details:
+        console.print(f"  - 详情: {details}")
+
+    console.print()
+
+    if details:
+        console.print(f"  - 详情: {details}")
+
+    console.print()
+
+
 def confirm(prompt: str, default: bool = False) -> bool:
     """确认提示.
 

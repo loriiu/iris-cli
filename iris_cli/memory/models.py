@@ -7,9 +7,12 @@ import json
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    from iris_cli.memory.search import SearchMode
 
 
 class MemoryType(str, Enum):
@@ -27,14 +30,6 @@ class MemoryStatus(str, Enum):
     ARCHIVED = "archived"  # 归档，权重 0.1-0.3
     DECAYED = "decayed"  # 衰退，权重 < 0.1，待清理
     CONSOLIDATED = "consolidated"  # 已整合，被合并到其他记忆
-
-
-class SearchMode(str, Enum):
-    """搜索模式枚举."""
-
-    SEMANTIC = "semantic"  # 语义搜索
-    KEYWORD = "keyword"  # 关键词搜索
-    HYBRID = "hybrid"  # 混合搜索
 
 
 class Memory(BaseModel):
@@ -164,35 +159,6 @@ class Memory(BaseModel):
         }
 
 
-class SearchResult(BaseModel):
-    """搜索结果模型."""
-
-    memory: Memory
-    score: float
-    match_type: SearchMode = SearchMode.SEMANTIC
-
-    @classmethod
-    def from_chroma_result(
-        cls,
-        memory: Memory,
-        distance: float,
-        match_type: SearchMode = SearchMode.SEMANTIC,
-    ) -> "SearchResult":
-        """从 ChromaDB 结果创建.
-
-        Args:
-            memory: 记忆对象
-            distance: 距离（余弦距离）
-            match_type: 匹配类型
-
-        Returns:
-            SearchResult 实例
-        """
-        # 余弦相似度 = 1 - 余弦距离
-        similarity = 1.0 - distance
-        return cls(memory=memory, score=similarity, match_type=match_type)
-
-
 class MemoryStats(BaseModel):
     """记忆统计模型."""
 
@@ -202,3 +168,22 @@ class MemoryStats(BaseModel):
     avg_weight: float = 0.0
     total_access_count: int = 0
     tags_distribution: dict[str, int] = Field(default_factory=dict)
+
+
+# Re-export SearchMode and SearchResult from search module for backward compatibility
+# Using try/except to avoid circular import issues
+try:
+    from iris_cli.memory.search import SearchMode, SearchResult
+except ImportError:
+    # Fallback for type checking
+    SearchMode = None  # type: ignore
+    SearchResult = None  # type: ignore
+
+__all__ = [
+    "Memory",
+    "MemoryType",
+    "MemoryStatus",
+    "MemoryStats",
+    "SearchMode",
+    "SearchResult",
+]

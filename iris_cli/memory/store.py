@@ -10,14 +10,17 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Dict, TYPE_CHECKING
 
 import chromadb
 from chromadb.config import Settings
 
 from iris_cli.config import get_config
-from iris_cli.memory.models import Memory, SearchResult, SearchMode
+from iris_cli.memory.models import Memory
 from iris_cli.memory.embedder import Embedder
+
+if TYPE_CHECKING:
+    from iris_cli.memory.search import SearchResult, SearchMode
 
 
 @dataclass

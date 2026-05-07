@@ -154,7 +154,26 @@ class Exporter:
         return json.dumps(output, ensure_ascii=False, indent=2)
 
     def _export_markdown(self, memories: list[Memory]) -> str:
-        """导出为 Markdown 格式."""
+        """导出为 Markdown 格式，按状态分组."""
+        # 按状态分组，每组内按创建时间排序
+        status_groups: dict[MemoryStatus, list[Memory]] = {}
+        for m in memories:
+            if m.status not in status_groups:
+                status_groups[m.status] = []
+            status_groups[m.status].append(m)
+        
+        # 每组内按创建时间排序
+        for status in status_groups:
+            status_groups[status].sort(key=lambda m: m.created_at)
+        
+        # 状态显示名称映射
+        status_labels = {
+            MemoryStatus.ACTIVE: "Active",
+            MemoryStatus.ARCHIVED: "Archived", 
+            MemoryStatus.DECAYED: "Decayed",
+            MemoryStatus.CONSOLIDATED: "Consolidated",
+        }
+        
         lines = [
             "# Iris Memory Export",
             "",
@@ -162,26 +181,34 @@ class Exporter:
             f"Total memories: {len(memories)}",
             "",
         ]
-
-        for m in memories:
-            lines.append(f"## {m.summary or m.content[:50]}...")
+        
+        # 按状态顺序输出
+        for status in [MemoryStatus.ACTIVE, MemoryStatus.ARCHIVED, MemoryStatus.DECAYED, MemoryStatus.CONSOLIDATED]:
+            if status not in status_groups:
+                continue
+            group = status_groups[status]
+            label = status_labels.get(status, status.value)
+            lines.append(f"## {label} ({len(group)})")
             lines.append("")
-            lines.append(f"- **ID**: `{m.id}`")
-            lines.append(f"- **Type**: {m.memory_type.value}")
-            lines.append(f"- **Status**: {m.status.value}")
-            lines.append(f"- **Weight**: {m.weight:.3f}")
-            lines.append(f"- **Tags**: {', '.join(m.tags) if m.tags else 'None'}")
-            lines.append(f"- **Created**: {m.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-            lines.append(f"- **Accessed**: {m.accessed_at.strftime('%Y-%m-%d %H:%M:%S')}")
-            lines.append(f"- **Access Count**: {m.access_count}")
-            lines.append("")
-            lines.append("### Content")
-            lines.append("")
-            lines.append(m.content)
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
+            
+            for m in group:
+                lines.append(f"### {m.summary or m.content[:50]}...")
+                lines.append("")
+                lines.append(f"- **ID**: `{m.id}`")
+                lines.append(f"- **Type**: {m.memory_type.value}")
+                lines.append(f"- **Weight**: {m.weight:.3f}")
+                lines.append(f"- **Tags**: {', '.join(m.tags) if m.tags else 'None'}")
+                lines.append(f"- **Created**: {m.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                lines.append(f"- **Accessed**: {m.accessed_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                lines.append(f"- **Access Count**: {m.access_count}")
+                lines.append("")
+                lines.append("### Content")
+                lines.append("")
+                lines.append(m.content)
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+        
         return "\n".join(lines)
 
 
